@@ -5,10 +5,11 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"niu/core"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/sooomo/niu/core"
 
 	"github.com/gorilla/websocket"
 )

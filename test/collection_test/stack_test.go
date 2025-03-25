@@ -1,8 +1,9 @@
 package collection_test
 
 import (
-	"niu/collection"
 	"testing"
+
+	"github.com/sooomo/niu/collection"
 )
 
 var ls = &collection.FastStack[string]{}

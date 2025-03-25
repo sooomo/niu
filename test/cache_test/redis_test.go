@@ -2,9 +2,10 @@ package cachetest_test
 
 import (
 	"context"
-	"niu/cache"
 	"testing"
 	"time"
+
+	"github.com/sooomo/niu/cache"
 
 	"github.com/redis/go-redis/v9"
 )

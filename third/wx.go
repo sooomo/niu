@@ -3,7 +3,7 @@ package third
 import (
 	"fmt"
 
-	"niu/net"
+	"github.com/sooomo/niu/net"
 )
 
 type wxAuthResp struct {

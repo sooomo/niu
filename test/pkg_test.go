@@ -3,13 +3,14 @@ package test
 import (
 	"fmt"
 	"net/http"
-	"niu/core"
-	"niu/net"
-	"niu/net/protocols"
 	"testing"
 	"time"
 
-	"niu/crypto"
+	"github.com/sooomo/niu/core"
+	"github.com/sooomo/niu/net"
+	"github.com/sooomo/niu/net/protocols"
+
+	"github.com/sooomo/niu/crypto"
 
 	"github.com/gin-gonic/gin"
 	"github.com/panjf2000/ants/v2"

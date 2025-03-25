@@ -3,8 +3,9 @@ package protocols
 import (
 	"encoding/json"
 	"errors"
-	"niu/crypto"
 	"time"
+
+	"github.com/sooomo/niu/crypto"
 )
 
 type JsonProtocol struct {

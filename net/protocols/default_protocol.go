@@ -2,8 +2,9 @@ package protocols
 
 import (
 	"errors"
-	"niu/crypto"
 	"time"
+
+	"github.com/sooomo/niu/crypto"
 )
 
 type DefaultMessageProtocol struct {

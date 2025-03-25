@@ -4,7 +4,7 @@ import (
 	"strconv"
 	"time"
 
-	"niu/strs"
+	"github.com/sooomo/niu/strs"
 )
 
 const (

@@ -1,4 +1,4 @@
-module niu
+module github.com/sooomo/niu
 
 go 1.24.0
 

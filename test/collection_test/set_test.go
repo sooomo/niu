@@ -4,7 +4,7 @@ import (
 	"slices"
 	"testing"
 
-	"niu/collection"
+	"github.com/sooomo/niu/collection"
 )
 
 var set = &collection.Set[string]{}

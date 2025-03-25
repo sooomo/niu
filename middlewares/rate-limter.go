@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"niu/net"
+	"github.com/sooomo/niu/net"
 
 	"github.com/gin-gonic/gin"
 	"golang.org/x/time/rate"

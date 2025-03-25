@@ -2,9 +2,10 @@ package slice
 
 import (
 	"math/rand"
-	"niu/core"
 	"strings"
 	"time"
+
+	"github.com/sooomo/niu/core"
 )
 
 // 找到数组中第一个满足条件的项
