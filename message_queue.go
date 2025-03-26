@@ -26,6 +26,17 @@ func NewRedisMessageQueue(c *redis.Client, pool RoutinePool, xaddMaxLen, batchSi
 	return &RedisMessageQueue{c, pool, xaddMaxLen, batchSize}
 }
 
+func NewRedisMessageQueueWithAddr(ctx context.Context, addr string, pool RoutinePool, xaddMaxLen, batchSize int) (*RedisMessageQueue, error) {
+	client := redis.NewClient(&redis.Options{
+		Addr: addr,
+	})
+	_, err := client.Ping(ctx).Result()
+	if err != nil {
+		return nil, err
+	}
+	return &RedisMessageQueue{client, pool, xaddMaxLen, batchSize}, nil
+}
+
 // 发布消息
 func (m *RedisMessageQueue) Publish(ctx context.Context, topic string, body map[string]any) error {
 	res := m.client.XAdd(ctx, &redis.XAddArgs{

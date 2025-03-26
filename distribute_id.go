@@ -39,6 +39,17 @@ func NewDistributeId(ctx context.Context, client *redis.Client, key string, star
 	return &d, err
 }
 
+func NewDistributeIdWithAddr(ctx context.Context, addr, key string, start int) (*DistributeId, error) {
+	client := redis.NewClient(&redis.Options{
+		Addr: addr,
+	})
+	_, err := client.Ping(ctx).Result()
+	if err != nil {
+		return nil, err
+	}
+	return NewDistributeId(ctx, client, key, start)
+}
+
 func (c *DistributeId) Next(ctx context.Context) (int, error) {
 	res, err := c.incrBy(ctx, c.Key, 1)
 	if err != nil {

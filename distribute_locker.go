@@ -37,6 +37,17 @@ func NewDistributeLocker(client *redis.Client, ttl time.Duration, retryStrategy 
 	return &DistributeLocker{client, ttl, retryStrategy}
 }
 
+func NewDistributeLockerWithAddr(ctx context.Context, addr string, ttl time.Duration, retryStrategy RetryStrategy) (*DistributeLocker, error) {
+	client := redis.NewClient(&redis.Options{
+		Addr: addr,
+	})
+	_, err := client.Ping(ctx).Result()
+	if err != nil {
+		return nil, err
+	}
+	return &DistributeLocker{client, ttl, retryStrategy}, nil
+}
+
 func (l *DistributeLocker) Lock(ctx context.Context, resource string, token string) (*DistributeLock, error) {
 	return l.LockWithOptions(ctx, &DistributeLockOptions{
 		Resource:      resource,

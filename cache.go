@@ -34,6 +34,16 @@ func NewCache(ctx context.Context, masterOpt, slaveOpt *redis.Options) (*Cache, 
 	return c, nil
 }
 
+func NewCacheWithAddr(ctx context.Context, addr string, slaveAddr string) (*Cache, error) {
+	var slaveOpt *redis.Options = nil
+	if len(slaveAddr) > 0 {
+		slaveOpt = &redis.Options{
+			Addr: slaveAddr,
+		}
+	}
+	return NewCache(ctx, &redis.Options{Addr: addr}, slaveOpt)
+}
+
 func (c *Cache) Master() *redis.Client {
 	return c.master
 }
