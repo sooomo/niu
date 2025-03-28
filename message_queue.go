@@ -12,7 +12,7 @@ type ConsumeMsgHandler func(ctx context.Context, id string, msg map[string]any) 
 
 type MessageQueue interface {
 	Publish(ctx context.Context, topic string, body map[string]any) error
-	Consume(ctx context.Context, topic, group, consumer string, handler ConsumeMsgHandler) error
+	Subscribe(ctx context.Context, topic, group, consumer string, handler ConsumeMsgHandler) error
 }
 
 type RedisMessageQueue struct {

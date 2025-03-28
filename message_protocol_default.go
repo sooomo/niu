@@ -35,7 +35,7 @@ func (m *DefaultMessageProtocol) GetSeqNumber() int { return int(m.seqNumber) }
 
 func (m *DefaultMessageProtocol) GetMeta(data []byte) (msgType byte, timestamp time.Time, seqNum byte, err error) {
 	if len(data) < 6 {
-		return 0, time.Now(), 0, errors.New("Bad Data Format")
+		return 0, time.Now(), 0, errors.New("bad data format")
 	}
 	ts := int64(data[1])<<24 | int64(data[2])<<16 | int64(data[3])<<8 | int64(data[4])
 	timestamp = protocolStartTime.Add(time.Duration(ts) * time.Second)
@@ -108,7 +108,7 @@ func (m *DefaultMessageProtocol) EncodeResp(msgType, code byte, payload any) ([]
 
 func (m *DefaultMessageProtocol) DecodeReq(data []byte, payload any) (msgType byte, err error) {
 	if len(data) < 6 {
-		return 0, errors.New("Bad Data Format")
+		return 0, errors.New("bad data format")
 	}
 	msgType = data[0]
 	ts := int64(data[1])<<24 | int64(data[2])<<16 | int64(data[3])<<8 | int64(data[4])
@@ -119,14 +119,14 @@ func (m *DefaultMessageProtocol) DecodeReq(data []byte, payload any) (msgType by
 	if m.signer != nil {
 		end := 6 + m.signer.Len()
 		if len(data) < end {
-			return 0, errors.New("Bad Data Format: No Sign")
+			return 0, errors.New("bad data format: no sign")
 		}
 		signature := data[6:end]
 		body = data[end:]
 		dataToVerify := data[:6]
 		dataToVerify = append(dataToVerify, body...)
 		if !m.signer.Verify(dataToVerify, signature) {
-			return 0, errors.New("Sign verify fail")
+			return 0, errors.New("sign verify fail")
 		}
 	}
 
@@ -145,7 +145,7 @@ func (m *DefaultMessageProtocol) DecodeReq(data []byte, payload any) (msgType by
 
 func (m *DefaultMessageProtocol) DecodeResp(data []byte, payload any) (msgType, code byte, err error) {
 	if len(data) < 7 {
-		return 0, 0, errors.New("Bad Data Format")
+		return 0, 0, errors.New("bad data format")
 	}
 	msgType = data[0]
 	ts := int64(data[1])<<24 | int64(data[2])<<16 | int64(data[3])<<8 | int64(data[4])
@@ -157,7 +157,7 @@ func (m *DefaultMessageProtocol) DecodeResp(data []byte, payload any) (msgType, 
 	if m.signer != nil {
 		end := 7 + m.signer.Len()
 		if len(data) < end {
-			return 0, 0, errors.New("Bad Data Format: No Sign")
+			return 0, 0, errors.New("bad data format: no sign")
 		}
 		signBytes := data[7:end]
 		body = data[end:]
