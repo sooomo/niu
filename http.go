@@ -2,13 +2,12 @@ package niu
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
 	"strconv"
 	"time"
-
-	"github.com/bytedance/sonic"
 )
 
 const (
@@ -77,7 +76,7 @@ func NewHttpOptionsJson(authorization string) *HttpOptions {
 
 // resp 必须是一个指针
 func HttpPostJson(url string, data any, options *HttpOptions, resp any) error {
-	jsonBytes, err := sonic.Marshal(data)
+	jsonBytes, err := json.Marshal(data)
 	if err != nil {
 		return err
 	}
@@ -86,7 +85,7 @@ func HttpPostJson(url string, data any, options *HttpOptions, resp any) error {
 	if err != nil {
 		return err
 	}
-	err = sonic.Unmarshal(respBytes, resp)
+	err = json.Unmarshal(respBytes, resp)
 	if err != nil {
 		return err
 	}
@@ -124,7 +123,7 @@ func HttpGetJson(url string, options *HttpOptions, resp any) error {
 	if err != nil {
 		return err
 	}
-	err = sonic.Unmarshal(respBytes, resp)
+	err = json.Unmarshal(respBytes, resp)
 	if err != nil {
 		return err
 	}
