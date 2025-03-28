@@ -8,7 +8,7 @@ import (
 )
 
 // id 消费者需要通过此Id来判断该消息是否已被消费
-type ConsumeMsgHandler func(id string, msg *map[string]any) error
+type ConsumeMsgHandler func(ctx context.Context, id string, msg map[string]any) error
 
 type MessageQueue interface {
 	Publish(ctx context.Context, topic string, body map[string]any) error
@@ -52,7 +52,8 @@ func (m *RedisMessageQueue) Publish(ctx context.Context, topic string, body map[
 // 开启协程后台消费。返回值代表消费过程中遇到的无法处理的错误
 // group 消费者组，一般为当前服务的名称
 // consumer 消费者组里的消费者，一般为一个uuid
-func (m *RedisMessageQueue) Consume(ctx context.Context, topic, group, consumer string, handler ConsumeMsgHandler) error {
+// handler 消费消息的处理器，如果返回nil，则表示消息被成功消费，如果返回非nil，则表示消息被消费失败，需要重试
+func (m *RedisMessageQueue) Subscribe(ctx context.Context, topic, group, consumer string, handler ConsumeMsgHandler) error {
 	res := m.client.XGroupCreateMkStream(ctx, topic, group, "0") // start 用于创建消费者组的时候指定起始消费ID，0表示从头开始消费，$表示从最后一条消息开始消费
 	err := res.Err()
 	if err != nil && !strings.HasPrefix(err.Error(), "BUSYGROUP") {
@@ -60,13 +61,18 @@ func (m *RedisMessageQueue) Consume(ctx context.Context, topic, group, consumer 
 	}
 	return m.pool.Submit(func() {
 		for {
-			// 拉取新消息
-			if err := m.consume(ctx, topic, group, consumer, ">", m.batchSize, handler); err != nil {
+			select {
+			case <-ctx.Done():
 				return
-			}
-			// 拉取已经投递却未被ACK的消息，保证消息至少被成功消费1次
-			if err := m.consume(ctx, topic, group, consumer, "0", m.batchSize, handler); err != nil {
-				return
+			default:
+				// 拉取新消息
+				if err := m.consume(ctx, topic, group, consumer, ">", m.batchSize, handler); err != nil {
+					continue
+				}
+				// 拉取已经投递却未被ACK的消息，保证消息至少被成功消费1次
+				if err := m.consume(ctx, topic, group, consumer, "0", m.batchSize, handler); err != nil {
+					continue
+				}
 			}
 		}
 	})
@@ -86,11 +92,17 @@ func (m *RedisMessageQueue) consume(ctx context.Context, topic, group, consumer,
 	}
 	// 处理消息
 	for _, msg := range result[0].Messages {
-		err := h(msg.ID, &msg.Values)
-		if err == nil {
-			err := m.client.XAck(ctx, topic, group, msg.ID).Err()
+		select {
+		case <-ctx.Done():
+			return nil
+		default:
+			err := h(ctx, msg.ID, msg.Values)
 			if err != nil {
-				return err
+				continue
+			}
+			err = m.client.XAck(ctx, topic, group, msg.ID).Err()
+			if err != nil {
+				continue
 			}
 		}
 	}
