@@ -192,7 +192,7 @@ func (d *Authenticator) GetPlatform(c *gin.Context) string {
 	return strings.TrimSpace(c.GetHeader("X-Platform"))
 }
 
-func (d *Authenticator) GetMustAllowHeaders(c *gin.Context) []string {
+func (d *Authenticator) GetMustAllowHeaders() []string {
 	return []string{
 		"X-Nonce",
 		"X-Timestamp",
