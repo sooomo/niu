@@ -202,6 +202,14 @@ func (d *Authenticator) GetMustAllowHeaders() []string {
 	}
 }
 
+func (d *Authenticator) GetMustExposeHeaders() []string {
+	return []string{
+		"X-Nonce",
+		"X-Timestamp",
+		"X-Signature",
+	}
+}
+
 // 用于生成待签名的内容
 func (d *Authenticator) stringfySignData(params map[string]string) []byte {
 	// 对参数名进行排序
