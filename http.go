@@ -14,9 +14,9 @@ const (
 	HeaderAuthorization = "Authorization"
 	HeaderContentType   = "Content-Type"
 
-	ContentTypeJson = "application/json;charset=utf-8"
-	ContentTypeText = "text/plain;charset=utf-8"
-	ContentTypeSec  = "text/sec;charset=utf-8"
+	ContentTypeJson      = "application/json;charset=utf-8"
+	ContentTypeText      = "text/plain;charset=utf-8"
+	ContentTypeEncrypted = "application/x-encrypted;charset=utf-8"
 )
 
 // 发送 Http Post 请求
