@@ -209,6 +209,17 @@ func (d *Authenticator) GetMustExposeHeaders() []string {
 		"X-Signature",
 	}
 }
+func (d *Authenticator) GetClaims(c *gin.Context) *AuthorizedClaims {
+	val, exist := c.Get("claims")
+	if !exist {
+		return nil
+	}
+	claims, ok := val.(*AuthorizedClaims)
+	if !ok {
+		return nil
+	}
+	return claims
+}
 
 // 用于生成待签名的内容
 func (d *Authenticator) stringfySignData(params map[string]string) []byte {
@@ -438,13 +449,13 @@ func (d *Authenticator) replaceRequestBody(c *gin.Context, reqBody []byte) (canC
 	return true, cryptor
 }
 
-func (a *Authenticator) parseToken(tokenString string) (*CustomClaims, error) {
+func (a *Authenticator) parseToken(tokenString string) (*AuthorizedClaims, error) {
 	if len(a.jwtSecret) == 0 {
 		panic("jwtSecret is empty")
 	}
 	token, err := jwt.ParseWithClaims(
 		tokenString,
-		&CustomClaims{},
+		&AuthorizedClaims{},
 		func(token *jwt.Token) (any, error) {
 			return a.jwtSecret, nil // 返回用于验证签名的密钥
 		},
@@ -452,7 +463,7 @@ func (a *Authenticator) parseToken(tokenString string) (*CustomClaims, error) {
 	if err != nil {
 		return nil, err
 	}
-	if claims, ok := token.Claims.(*CustomClaims); ok && token.Valid {
+	if claims, ok := token.Claims.(*AuthorizedClaims); ok && token.Valid {
 		return claims, nil // 验证通过后返回自定义声明数据
 	}
 	return nil, err
@@ -462,7 +473,7 @@ func (a *Authenticator) GenerateToken(userID int, role, platform string) (string
 	if len(a.jwtSecret) == 0 {
 		panic("jwtSecret is empty")
 	}
-	claims := CustomClaims{
+	claims := AuthorizedClaims{
 		UserId:   userID,
 		Role:     role,
 		Platform: platform,
@@ -500,7 +511,7 @@ func (w bodyWriter) Write(b []byte) (int, error) {
 	return w.buf.Write(b)
 }
 
-type CustomClaims struct {
+type AuthorizedClaims struct {
 	UserId               int    `json:"u"`
 	Role                 string `json:"r"`
 	Platform             string `json:"p"`
