@@ -192,6 +192,16 @@ func (d *Authenticator) GetPlatform(c *gin.Context) string {
 	return strings.TrimSpace(c.GetHeader("X-Platform"))
 }
 
+func (d *Authenticator) GetMustAllowHeaders(c *gin.Context) []string {
+	return []string{
+		"X-Nonce",
+		"X-Timestamp",
+		"X-Platform",
+		"X-Signature",
+		"Authorization",
+	}
+}
+
 // 用于生成待签名的内容
 func (d *Authenticator) stringfySignData(params map[string]string) []byte {
 	// 对参数名进行排序
