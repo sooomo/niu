@@ -1,6 +1,9 @@
 package niu
 
-import "strconv"
+import (
+	"slices"
+	"strconv"
+)
 
 type Platform int8
 
@@ -20,12 +23,19 @@ const (
 var Platforms = []Platform{Android, AndroidPad, IPhone, IPad, Mac, IPad, Windows, Linux, Web, Harmony}
 
 func IsPlatformValid(p Platform) bool {
-	for _, v := range Platforms {
-		if v == p {
-			return true
-		}
+	return slices.Contains(Platforms, p)
+}
+
+func ParsePlatform(pstr string) Platform {
+	if !IsPlatformStringValid(pstr) {
+		return Unspecify
 	}
-	return false
+
+	p, err := strconv.Atoi(pstr)
+	if err != nil {
+		return Unspecify
+	}
+	return Platform(p)
 }
 
 func IsPlatformStringValid(pstr string) bool {
@@ -38,10 +48,5 @@ func IsPlatformStringValid(pstr string) bool {
 		return false
 	}
 
-	for _, v := range Platforms {
-		if v == Platform(p) {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(Platforms, Platform(p))
 }
