@@ -469,13 +469,13 @@ func (a *Authenticator) parseToken(tokenString string) (*AuthorizedClaims, error
 	return nil, err
 }
 
-func (a *Authenticator) GenerateToken(userID int, role, platform string) (string, error) {
+func (a *Authenticator) GenerateToken(userID int, roles []string, platform Platform) (string, error) {
 	if len(a.jwtSecret) == 0 {
 		panic("jwtSecret is empty")
 	}
 	claims := AuthorizedClaims{
 		UserId:   userID,
-		Role:     role,
+		Roles:    roles,
 		Platform: platform,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(a.jwtTokenTTL)), // 过期时间
@@ -512,8 +512,8 @@ func (w bodyWriter) Write(b []byte) (int, error) {
 }
 
 type AuthorizedClaims struct {
-	UserId               int    `json:"u"`
-	Role                 string `json:"r"`
-	Platform             string `json:"p"`
-	jwt.RegisteredClaims        // 包含标准字段如 exp（过期时间）、iss（签发者）等
+	UserId               int      `json:"u"`
+	Roles                []string `json:"r"`
+	Platform             Platform `json:"p"`
+	jwt.RegisteredClaims          // 包含标准字段如 exp（过期时间）、iss（签发者）等
 }
