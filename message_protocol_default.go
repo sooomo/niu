@@ -117,7 +117,7 @@ func (m *DefaultMessageProtocol) DecodeReq(data []byte, payload any) (msgType by
 	body := data[6:]
 
 	if m.signer != nil {
-		end := 6 + m.signer.Len()
+		end := 6 + m.signer.SignatureLen()
 		if len(data) < end {
 			return 0, errors.New("bad data format: no sign")
 		}
@@ -155,7 +155,7 @@ func (m *DefaultMessageProtocol) DecodeResp(data []byte, payload any) (msgType, 
 	body := data[7:]
 
 	if m.signer != nil {
-		end := 7 + m.signer.Len()
+		end := 7 + m.signer.SignatureLen()
 		if len(data) < end {
 			return 0, 0, errors.New("bad data format: no sign")
 		}

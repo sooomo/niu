@@ -2,9 +2,7 @@ package niu
 
 import (
 	"bytes"
-	"crypto/hmac"
-	"crypto/sha256"
-	"encoding/hex"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -15,52 +13,128 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/golang-jwt/jwt/v5"
+	"github.com/redis/go-redis/v9"
 )
+
+type AuthenticateOption interface {
+	apply(*Authenticator)
+}
+
+var _ AuthenticateOption = (*optionFunc)(nil)
+
+type optionFunc func(*Authenticator)
+
+func (o optionFunc) apply(c *Authenticator) {
+	o(c)
+}
 
 // Authenticator 需要处理以下内容：
 // 1. 验证请求是否合法有效
 // 2. 验证请求是否被篡改
 // 3. 验证请求是否被重复使用
 // 4. 跨域问题
-type Authenticator interface {
-	AuthenticateMiddleware(c *gin.Context)
-}
-
-type ReplayHandler interface {
-	IsReplayRequest(requestId string, timestamp int64) bool
-	MarkRequestHandled(id string) error
-}
-
-type DefaultAuthenticator struct {
-	replayHandler      ReplayHandler
-	signer             Signer
-	cryptor            Cryptor
+type Authenticator struct {
+	signerResolver     SignerResolver
+	cryptorResolver    CryptorResolver
 	cryptPaths         []string          // 如果包含*号，表示所有请求都是加密请求
 	cryptExcludePaths  []string          // 指定哪些请求不加密，优先级高于cryptPaths
 	allowMethods       []string          // 如果为空，表示允许所有请求
 	decryptContentType map[string]string // 解密后内容的content-type，默认为 application/json
+	authPaths          []string          // 如果包含*号，需要认证的路径
+	authExcludePaths   []string          // 认证排除路径，优先级高于authPaths
 
-	bufferPool sync.Pool
+	bufferPool  sync.Pool
+	jwtIssuer   string
+	jwtTokenTTL time.Duration
+	jwtSecret   []byte
+
+	redisClient *redis.Client
 }
 
-func NewAuthenticator() *DefaultAuthenticator {
-	d := &DefaultAuthenticator{}
-	d.bufferPool = sync.Pool{
-		New: func() any {
-			return bytes.NewBuffer(make([]byte, 0, 1024))
+type SignerResolver interface {
+	Resolve(c *gin.Context) (Signer, error)
+}
+
+type HmacSignerResolver struct {
+	secret []byte
+}
+
+func (a *HmacSignerResolver) Resolve(c *gin.Context) (Signer, error) {
+	return &HmacSigner{a.secret}, nil
+}
+
+type CryptorResolver interface {
+	Resolve(c *gin.Context) (Cryptor, error)
+}
+
+func NewHmacSignerResolver(secret []byte) SignerResolver {
+	return &HmacSignerResolver{secret: secret}
+}
+
+func WithCryptPaths(cryptPaths, excludePaths []string) AuthenticateOption {
+	return optionFunc(func(o *Authenticator) {
+		o.cryptPaths = cryptPaths
+		o.cryptExcludePaths = excludePaths
+	})
+}
+func WithAllowMethods(allowMethods []string) AuthenticateOption {
+	return optionFunc(func(o *Authenticator) {
+		o.allowMethods = allowMethods
+	})
+}
+func WithDecryptContentType(decryptContentType map[string]string) AuthenticateOption {
+	return optionFunc(func(o *Authenticator) {
+		o.decryptContentType = decryptContentType
+	})
+}
+func WithAuthPaths(authPaths, excludePaths []string) AuthenticateOption {
+	return optionFunc(func(o *Authenticator) {
+		o.authPaths = authPaths
+		o.authExcludePaths = excludePaths
+	})
+}
+func WithJwt(issuer string, ttl time.Duration, secret []byte) AuthenticateOption {
+	return optionFunc(func(o *Authenticator) {
+		o.jwtIssuer = issuer
+		o.jwtTokenTTL = ttl
+		o.jwtSecret = secret
+	})
+}
+
+func NewAuthenticator(ctx context.Context, redisAddr string, signerResolver SignerResolver, opts ...AuthenticateOption) (*Authenticator, error) {
+	d := &Authenticator{
+		signerResolver: signerResolver,
+		bufferPool: sync.Pool{
+			New: func() any {
+				return bytes.NewBuffer(make([]byte, 0, 1024))
+			},
 		},
+		redisClient: redis.NewClient(&redis.Options{
+			Addr: redisAddr,
+		}),
+	}
+	for _, opt := range opts {
+		opt.apply(d)
+	}
+	if d.signerResolver == nil {
+		return nil, errors.New("signer resolver is nil")
+	}
+	_, err := d.redisClient.Ping(ctx).Result()
+	if err != nil {
+		return nil, err
 	}
 
-	return d
+	return d, nil
 }
 
-func (d *DefaultAuthenticator) getBuffer() *bytes.Buffer {
+func (d *Authenticator) getBuffer() *bytes.Buffer {
 	buf := d.bufferPool.Get().(*bytes.Buffer)
 	buf.Reset()
 	return buf
 }
 
-func (d *DefaultAuthenticator) isMethodAllowed(c *gin.Context) bool {
+func (d *Authenticator) isMethodAllowed(c *gin.Context) bool {
 	if len(d.allowMethods) == 0 {
 		return true
 	}
@@ -71,7 +145,7 @@ func (d *DefaultAuthenticator) isMethodAllowed(c *gin.Context) bool {
 	}
 	return false
 }
-func (d *DefaultAuthenticator) isPathEncrypted(path string) bool {
+func (d *Authenticator) isPathEncrypted(path string) bool {
 	for _, p := range d.cryptExcludePaths {
 		if strings.EqualFold(p, path) {
 			return false
@@ -87,7 +161,7 @@ func (d *DefaultAuthenticator) isPathEncrypted(path string) bool {
 	}
 	return false
 }
-func (d *DefaultAuthenticator) getDecryptContentType(path string) string {
+func (d *Authenticator) getDecryptContentType(path string) string {
 	if len(d.decryptContentType) == 0 {
 		return ContentTypeJson
 	}
@@ -98,134 +172,28 @@ func (d *DefaultAuthenticator) getDecryptContentType(path string) string {
 	}
 	return ContentTypeJson
 }
-
-func (d *DefaultAuthenticator) AuthenticateMiddleware(c *gin.Context) {
-	if !d.isMethodAllowed(c) {
-		c.AbortWithStatus(405)
-		return
-	}
-
-	nonce := strings.TrimSpace(c.GetHeader("X-Nonce"))
-	timestampStr := strings.TrimSpace(c.GetHeader("X-Timestamp"))
-	platform := strings.TrimSpace(c.GetHeader("X-Platform"))
-	signature := c.GetHeader("X-Signature")
-	if len(nonce) == 0 || len(timestampStr) == 0 || len(signature) == 0 || !IsPlatformStringValid(platform) {
-		c.AbortWithStatus(400)
-		return
-	}
-
-	timestamp, err := strconv.ParseInt(timestampStr, 10, 64)
-	if err != nil {
-		c.AbortWithError(400, errors.New("timestamp is invalid"))
-		return
-	}
-
-	// 1. 验证请求是否是重放请求
-	if d.replayHandler.IsReplayRequest(nonce, timestamp) {
-		c.AbortWithError(400, errors.New("repeat request"))
-		return
-	}
-	err = d.replayHandler.MarkRequestHandled(nonce)
-	if err != nil {
-		c.AbortWithStatus(500)
-		return
-	}
-
-	// 2. 验证请求是否被篡改
-	reqBody := make([]byte, 0, 0)
-	if c.Request.Body != nil {
-		reqBody, err = io.ReadAll(c.Request.Body)
-		if err != nil {
-			c.AbortWithStatus(500)
-			return
+func (d *Authenticator) isPathNeedAuth(path string) bool {
+	for _, p := range d.authExcludePaths {
+		if strings.EqualFold(p, path) {
+			return false
 		}
 	}
-
-	// 3. 先验证签名是否正确，在根据需要解密请求体
-	signdata := d.stringfySignData(map[string]string{
-		"nonce":     nonce,
-		"timestamp": timestampStr,
-		"platform":  platform,
-		"method":    c.Request.Method,
-		"path":      c.Request.URL.Path,
-		"query":     c.Request.URL.RawQuery,
-		"body":      string(reqBody),
-	})
-	if !d.signer.Verify(signdata, []byte(signature)) {
-		c.AbortWithError(400, errors.New("invalid signature"))
-		return
-	}
-
-	// 4. 修改并重置请求体: 需验证请求是否加密，如果加密，则解密
-	if len(reqBody) > 0 {
-		if d.isPathEncrypted(c.Request.URL.Path) {
-			contentType := c.GetHeader("Content-Type")
-			if !strings.EqualFold(contentType, ContentTypeEncrypted) {
-				c.AbortWithStatus(400)
-				return
-			}
-			// 解密
-			reqBody, err = d.cryptor.Decrypt(reqBody)
-			if err != nil {
-				c.AbortWithError(400, errors.New("decrypt fail"))
-				return
-			}
-
-			c.Request.Header.Set("Content-Type", d.getDecryptContentType(c.Request.URL.Path))
+	for _, p := range d.authPaths {
+		if strings.Contains(p, "*") {
+			return true
 		}
-
-		buf := d.getBuffer()
-		buf.Write(reqBody)
-		c.Request.Body = io.NopCloser(buf)
-		c.Request.ContentLength = int64(len(reqBody))
-	}
-
-	// 3. 代理响应写入器
-	bodyWriter := &bodyWriter{ResponseWriter: c.Writer, buf: bytes.NewBuffer(make([]byte, 0, 1024))}
-	c.Writer = bodyWriter
-
-	// 4. 处理业务逻辑
-	c.Next()
-
-	// 5. 如果需要加密，则加密响应内容
-	responseBody := bodyWriter.buf.Bytes()
-	respContentType := c.Writer.Header().Get("Content-Type")
-	if d.isPathEncrypted(c.Request.URL.Path) {
-		responseBody, err = d.cryptor.Encrypt(responseBody)
-		if err != nil {
-			c.AbortWithError(500, errors.New("encrypt fail"))
-			return
+		if strings.EqualFold(p, path) {
+			return true
 		}
-		respContentType = ContentTypeEncrypted
 	}
-
-	// 6. 生成响应签名
-	respTimestamp := strconv.FormatInt(time.Now().UnixMilli(), 10)
-	respNonce := NewUUIDWithoutDash()
-	respSignData := d.stringfySignData(map[string]string{
-		"nonce":     respNonce,
-		"platform":  platform,
-		"timestamp": respTimestamp,
-		"method":    c.Request.Method,
-		"path":      c.Request.RequestURI,
-		"query":     c.Request.URL.RawQuery,
-		"body":      string(responseBody),
-	})
-	respSignature, err := d.signer.Sign(respSignData)
-	if err != nil {
-		c.AbortWithError(500, errors.New("sign fail"))
-	}
-	c.Header("X-Signature", respTimestamp)
-	c.Header("X-Nonce", respNonce)
-	c.Header("X-Timestamp", string(respSignature))
-	// browser need this, or it cannot read these headers
-	c.Header("Access-Control-Expose-Headers", "X-Timestamp,X-Nonce,X-Signature")
-	c.Header(HeaderContentType, respContentType)
-	c.Writer.Write(responseBody)
+	return false
+}
+func (d *Authenticator) GetPlatform(c *gin.Context) string {
+	return strings.TrimSpace(c.GetHeader("X-Platform"))
 }
 
 // 用于生成待签名的内容
-func (d *DefaultAuthenticator) stringfySignData(params map[string]string) []byte {
+func (d *Authenticator) stringfySignData(params map[string]string) []byte {
 	// 对参数名进行排序
 	keys := make([]string, 0, len(params))
 	for k := range params {
@@ -241,6 +209,269 @@ func (d *DefaultAuthenticator) stringfySignData(params map[string]string) []byte
 	return []byte(b.String())
 }
 
+func (d *Authenticator) AuthenticateMiddleware(c *gin.Context) {
+	if !d.isMethodAllowed(c) {
+		c.AbortWithStatus(405)
+		return
+	}
+
+	nonce := strings.TrimSpace(c.GetHeader("X-Nonce"))
+	timestampStr := strings.TrimSpace(c.GetHeader("X-Timestamp"))
+	platform := strings.TrimSpace(c.GetHeader("X-Platform"))
+	signature := c.GetHeader("X-Signature")
+	if len(nonce) == 0 || len(timestampStr) == 0 || len(signature) == 0 || !IsPlatformStringValid(platform) {
+		c.AbortWithStatus(400)
+		return
+	}
+
+	// 1. 验证请求是否是重放请求
+	if !d.checkReplay(c, nonce, timestampStr) {
+		return
+	}
+
+	// 2. 验证请求是否被篡改
+	reqBody := make([]byte, 0, 0)
+	if c.Request.Body != nil {
+		var err error
+		reqBody, err = io.ReadAll(c.Request.Body)
+		if err != nil {
+			c.AbortWithStatus(500)
+			return
+		}
+	}
+
+	// 3. 先验证签名是否正确，在根据需要解密请求体
+	signer, err := d.signerResolver.Resolve(c)
+	if err != nil {
+		c.AbortWithError(500, err)
+		return
+	}
+	signdata := d.stringfySignData(map[string]string{
+		"nonce":     nonce,
+		"timestamp": timestampStr,
+		"platform":  platform,
+		"method":    c.Request.Method,
+		"path":      c.Request.URL.Path,
+		"query":     c.Request.URL.RawQuery,
+		"body":      string(reqBody),
+	})
+	if !signer.Verify(signdata, []byte(signature)) {
+		c.AbortWithError(400, errors.New("invalid signature"))
+		return
+	}
+
+	// 4. 解码Token（如果有）
+	if !d.verifyToken(c) {
+		return
+	}
+
+	// 5. 修改并重置请求体: 需验证请求是否加密，如果加密，则解密
+	canContinue, cryptor := d.replaceRequestBody(c, reqBody)
+	if !canContinue {
+		return
+	}
+
+	// 6. 代理响应写入器
+	respBuf := d.getBuffer()
+	bodyWriter := &bodyWriter{ResponseWriter: c.Writer, buf: respBuf}
+	c.Writer = bodyWriter
+
+	// 7. 处理业务逻辑
+	c.Next()
+
+	// 8. 如果需要加密，则加密响应内容
+	responseBody := bodyWriter.buf.Bytes()
+	respContentType := c.Writer.Header().Get("Content-Type")
+	if d.isPathEncrypted(c.Request.URL.Path) {
+		if cryptor == nil {
+			panic("cryptor is nil")
+		}
+		var err error
+		responseBody, err = cryptor.Encrypt(responseBody)
+		if err != nil {
+			c.AbortWithError(500, errors.New("encrypt fail"))
+			return
+		}
+		respContentType = ContentTypeEncrypted
+	}
+
+	// 9. 生成响应签名
+	respTimestamp := strconv.FormatInt(time.Now().UnixMilli(), 10)
+	respNonce := NewUUIDWithoutDash()
+	respSignData := d.stringfySignData(map[string]string{
+		"nonce":     respNonce,
+		"platform":  platform,
+		"timestamp": respTimestamp,
+		"method":    c.Request.Method,
+		"path":      c.Request.RequestURI,
+		"query":     c.Request.URL.RawQuery,
+		"body":      string(responseBody),
+	})
+	respSignature, err := signer.Sign(respSignData)
+	if err != nil {
+		c.AbortWithError(500, errors.New("sign fail"))
+	}
+	// 10. 写入响应头
+	c.Header("X-Signature", respTimestamp)
+	c.Header("X-Nonce", respNonce)
+	c.Header("X-Timestamp", string(respSignature))
+	// browser need this, or it cannot read these headers
+	c.Header("Access-Control-Expose-Headers", "X-Timestamp,X-Nonce,X-Signature")
+	c.Header("Content-Type", respContentType)
+	c.Header("Content-Length", strconv.Itoa(len(responseBody)))
+	c.Writer.Write(responseBody)
+}
+
+func (d *Authenticator) checkReplay(c *gin.Context, nonce, timestamp string) (canContinue bool) {
+	timestampVal, err := strconv.ParseInt(timestamp, 10, 64)
+	if err != nil {
+		c.AbortWithError(400, errors.New("timestamp is invalid"))
+		return false
+	}
+	if time.Now().Unix()-timestampVal > 300 {
+		c.AbortWithError(400, errors.New("repeat request"))
+		return false // 超过5分钟的请求视为无效
+	}
+	res, err := d.redisClient.SetNX(c, "reply_check:"+nonce, "1", time.Duration(300)*time.Second).Result()
+	if err != nil {
+		c.AbortWithStatus(500)
+		return false
+	}
+	if !res {
+		// 重复请求
+		c.AbortWithError(400, errors.New("repeat request"))
+		return false
+	}
+	return true
+}
+
+func (d *Authenticator) verifyToken(c *gin.Context) (canContinue bool) {
+	tokenString := strings.TrimSpace(strings.TrimPrefix(c.GetHeader("Authorization"), "Bearer "))
+	if d.isPathNeedAuth(c.Request.URL.Path) {
+		if len(tokenString) == 0 {
+			c.AbortWithStatus(401)
+			return false
+		}
+		revoked, err := d.IsTokenRevoked(c, tokenString)
+		if err != nil {
+			c.AbortWithError(500, errors.New("check token revoke fail"))
+			return false
+		}
+		if revoked {
+			c.AbortWithStatus(401)
+			return false
+		}
+		// 解析Token
+		claims, err := d.parseToken(tokenString)
+		if err != nil {
+			c.AbortWithError(401, errors.New("invalid token"))
+			return false
+		}
+		c.Set("claims", claims)
+	} else if len(tokenString) > 0 {
+		revoked, _ := d.IsTokenRevoked(c, tokenString)
+		if !revoked {
+			// 解析Token
+			claims, err := d.parseToken(tokenString)
+			if err == nil {
+				// 忽略错误
+				c.Set("claims", claims)
+			}
+		}
+	}
+	return true
+}
+
+func (d *Authenticator) replaceRequestBody(c *gin.Context, reqBody []byte) (canContinue bool, cryptor Cryptor) {
+	if len(reqBody) == 0 {
+		return true, nil
+	}
+
+	if d.isPathEncrypted(c.Request.URL.Path) {
+		if d.cryptorResolver == nil {
+			panic("cryptor is nil")
+		}
+		contentType := c.GetHeader("Content-Type")
+		if !strings.EqualFold(contentType, ContentTypeEncrypted) {
+			c.AbortWithStatus(400)
+			return false, cryptor
+		}
+		var err error
+		cryptor, err = d.cryptorResolver.Resolve(c)
+		if err != nil {
+			c.AbortWithError(500, err)
+			return false, cryptor
+		}
+		// 解密
+		reqBody, err = cryptor.Decrypt(reqBody)
+		if err != nil {
+			c.AbortWithError(400, errors.New("decrypt fail"))
+			return false, cryptor
+		}
+
+		c.Request.Header.Set("Content-Type", d.getDecryptContentType(c.Request.URL.Path))
+	}
+
+	buf := d.getBuffer()
+	buf.Write(reqBody)
+	c.Request.Body = io.NopCloser(buf)
+	c.Request.ContentLength = int64(len(reqBody))
+
+	return true, cryptor
+}
+
+func (a *Authenticator) parseToken(tokenString string) (*CustomClaims, error) {
+	if len(a.jwtSecret) == 0 {
+		panic("jwtSecret is empty")
+	}
+	token, err := jwt.ParseWithClaims(
+		tokenString,
+		&CustomClaims{},
+		func(token *jwt.Token) (any, error) {
+			return a.jwtSecret, nil // 返回用于验证签名的密钥
+		},
+	)
+	if err != nil {
+		return nil, err
+	}
+	if claims, ok := token.Claims.(*CustomClaims); ok && token.Valid {
+		return claims, nil // 验证通过后返回自定义声明数据
+	}
+	return nil, err
+}
+
+func (a *Authenticator) GenerateToken(userID int, role, platform string) (string, error) {
+	if len(a.jwtSecret) == 0 {
+		panic("jwtSecret is empty")
+	}
+	claims := CustomClaims{
+		UserId:   userID,
+		Role:     role,
+		Platform: platform,
+		RegisteredClaims: jwt.RegisteredClaims{
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(a.jwtTokenTTL)), // 过期时间
+			Issuer:    a.jwtIssuer,                                       // 签发者
+		},
+	}
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	return token.SignedString(a.jwtSecret) // 使用 HMAC-SHA256 算法签名
+}
+
+func (a *Authenticator) RevokeToken(ctx context.Context, token string) error {
+	// 将Token添加到Redis集合中，表示已吊销
+	err := a.redisClient.SAdd(ctx, "revoked_tokens", token).Err()
+	return err
+}
+
+func (a *Authenticator) IsTokenRevoked(ctx context.Context, token string) (bool, error) {
+	// 检查Token是否存在于Redis集合中
+	exists, err := a.redisClient.SIsMember(ctx, "revoked_tokens", token).Result()
+	if err != nil {
+		return false, err
+	}
+	return exists, nil
+}
+
 // 自定义响应写入器
 type bodyWriter struct {
 	gin.ResponseWriter
@@ -248,13 +479,12 @@ type bodyWriter struct {
 }
 
 func (w bodyWriter) Write(b []byte) (int, error) {
-	w.buf.Write(b)
-	return w.ResponseWriter.Write(b)
+	return w.buf.Write(b)
 }
 
-// Golang 生成 HMAC 签名
-func GenerateHMAC(secret, data string) string {
-	h := hmac.New(sha256.New, []byte(secret))
-	h.Write([]byte(data))
-	return hex.EncodeToString(h.Sum(nil))
+type CustomClaims struct {
+	UserId               int    `json:"u"`
+	Role                 string `json:"r"`
+	Platform             string `json:"p"`
+	jwt.RegisteredClaims        // 包含标准字段如 exp（过期时间）、iss（签发者）等
 }

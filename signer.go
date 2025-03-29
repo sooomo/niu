@@ -2,15 +2,39 @@ package niu
 
 import (
 	"crypto/ed25519"
+	"crypto/hmac"
+	"crypto/sha256"
 	"encoding/base64"
 )
 
 type Signer interface {
 	Sign(rawData []byte) ([]byte, error)
-	SignToString(rawData []byte) (string, error)
 	Verify(utf8Bytes []byte, signature []byte) bool
-	VerifyFromString(utf8String string, base64Signature string) bool
-	Len() int
+	SignatureLen() int
+}
+
+type HmacSigner struct {
+	secretKey []byte
+}
+
+func NewHmacSigner(secret []byte) *HmacSigner {
+	return &HmacSigner{secretKey: secret}
+}
+
+func (h *HmacSigner) SignatureLen() int { return 32 }
+
+// Golang 生成 HMAC 签名
+func (h *HmacSigner) Sign(data []byte) ([]byte, error) {
+	ha := hmac.New(sha256.New, h.secretKey)
+	ha.Write(data)
+	return ha.Sum(nil), nil
+}
+
+func (h *HmacSigner) Verify(dataToSign []byte, signature []byte) bool {
+	ha := hmac.New(sha256.New, h.secretKey)
+	ha.Write(dataToSign)
+	sign := ha.Sum(nil)
+	return hmac.Equal(sign, signature)
 }
 
 type Ed25519Signer struct {
@@ -18,7 +42,7 @@ type Ed25519Signer struct {
 	SelfPrivateKey  ed25519.PrivateKey // 本地的私钥，用于对发往服务器的数据进行签名
 }
 
-func (e *Ed25519Signer) Len() int { return 64 }
+func (e *Ed25519Signer) SignatureLen() int { return 64 }
 
 func (e *Ed25519Signer) RemotePublicKeyString() string {
 	return Base64Encode(e.RemotePublicKey)
@@ -33,25 +57,9 @@ func (e *Ed25519Signer) Sign(rawData []byte) ([]byte, error) {
 	return ed25519.Sign(e.SelfPrivateKey, rawData), nil
 }
 
-// 对指定输入进行签名, 输出 base64 字符串
-func (e *Ed25519Signer) SignToString(rawData []byte) (string, error) {
-	signBytes := ed25519.Sign(e.SelfPrivateKey, rawData)
-	return Base64Encode(signBytes), nil
-}
-
 // 验证指定输入的签名
 func (e *Ed25519Signer) Verify(utf8Bytes []byte, signature []byte) bool {
 	return ed25519.Verify(e.RemotePublicKey, utf8Bytes, signature)
-}
-
-// 验证指定输入的签名， 输入的签名为 base64 字符串
-func (e *Ed25519Signer) VerifyFromString(utf8String string, base64Signature string) bool {
-	// 计算签名
-	sign, err := Base64Decode(base64Signature)
-	if err != nil {
-		return false
-	}
-	return e.Verify([]byte(utf8String), sign)
 }
 
 // 初始化一个签名器
