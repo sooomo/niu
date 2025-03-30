@@ -14,64 +14,69 @@ var (
 )
 
 type DistributeId struct {
-	client        *redis.Client
-	onceInitIdFac sync.Once
-	Key           string
-	Start         int
+	sync.RWMutex
+	client       *redis.Client
+	idGenerators map[string]*IdGenerator
 }
 
-func NewDistributeId(ctx context.Context, client *redis.Client, key string, start int) (*DistributeId, error) {
-	if client == nil || len(key) == 0 || start <= 0 {
-		return nil, ErrInvalidDistributeIdParams
-	}
-
-	var d = DistributeId{
-		client: client,
-		Key:    key,
-		Start:  start,
-	}
-
-	var err error
-	d.onceInitIdFac.Do(func() {
-		_, err = d.setNX(ctx, d.Key, d.Start, time.Duration(0))
-	})
-
-	return &d, err
-}
-
-func NewDistributeIdWithAddr(ctx context.Context, addr, key string, start int) (*DistributeId, error) {
-	client := redis.NewClient(&redis.Options{
-		Addr: addr,
-	})
+func NewDistributeId(ctx context.Context, opt *redis.Options, key string, start int) (*DistributeId, error) {
+	client := redis.NewClient(opt)
 	_, err := client.Ping(ctx).Result()
 	if err != nil {
 		return nil, err
 	}
-	return NewDistributeId(ctx, client, key, start)
+	return &DistributeId{client: client, idGenerators: make(map[string]*IdGenerator)}, nil
 }
 
-func (c *DistributeId) Next(ctx context.Context) (int, error) {
-	res, err := c.incrBy(ctx, c.Key, 1)
+func (d *DistributeId) NewGenerator(ctx context.Context, key string, start int) (*IdGenerator, error) {
+	d.Lock()
+	defer d.Unlock()
+	idGen, ok := d.idGenerators[key]
+	if ok {
+		return idGen, nil
+	}
+	idGen = &IdGenerator{
+		onceInitIdFac: sync.Once{},
+		client:        d.client,
+		key:           key,
+		start:         start,
+	}
+	err := idGen.init(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	d.idGenerators[key] = idGen
+	return idGen, nil
+}
+
+func (d *DistributeId) Close() {
+	d.Lock()
+	defer d.Unlock()
+	d.client.Close()
+	clear(d.idGenerators)
+}
+
+type IdGenerator struct {
+	client        *redis.Client
+	onceInitIdFac sync.Once
+	key           string
+	start         int
+}
+
+func (d *IdGenerator) init(ctx context.Context) error {
+	var err error
+	d.onceInitIdFac.Do(func() {
+		_, err = d.client.SetNX(ctx, d.key, d.start, time.Duration(0)).Result()
+	})
+
+	return err
+}
+
+func (c *IdGenerator) Next(ctx context.Context) (int, error) {
+	res, err := c.client.IncrBy(ctx, c.key, 1).Result()
 	if err != nil {
 		return -1, err
 	}
 	return int(res), nil
-}
-
-func (c *DistributeId) setNX(ctx context.Context, key string, value any, expiry time.Duration) (bool, error) {
-	res := c.client.SetNX(ctx, key, value, expiry)
-	err := res.Err()
-	if err != nil {
-		return false, err
-	}
-	return res.Val(), err
-}
-
-func (c *DistributeId) incrBy(ctx context.Context, key string, decrement int64) (int64, error) {
-	res := c.client.IncrBy(ctx, key, decrement)
-	err := res.Err()
-	if err != nil {
-		return -1, err
-	}
-	return res.Val(), err
 }

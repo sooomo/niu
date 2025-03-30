@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -22,36 +23,41 @@ var (
 
 type DistributeLockOptions struct {
 	Resource      string
-	Token         string
+	Owner         string
 	Ttl           time.Duration
 	RetryStrategy RetryStrategy
 }
 
 type DistributeLocker struct {
+	mutex                sync.RWMutex
 	redisClient          *redis.Client
 	defaultTtl           time.Duration
 	defaultRetryStrategy RetryStrategy
 }
 
-func NewDistributeLocker(client *redis.Client, ttl time.Duration, retryStrategy RetryStrategy) *DistributeLocker {
-	return &DistributeLocker{client, ttl, retryStrategy}
-}
-
-func NewDistributeLockerWithAddr(ctx context.Context, addr string, ttl time.Duration, retryStrategy RetryStrategy) (*DistributeLocker, error) {
-	client := redis.NewClient(&redis.Options{
-		Addr: addr,
-	})
+func NewDistributeLocker(ctx context.Context, opt *redis.Options, ttl time.Duration, retryStrategy RetryStrategy) (*DistributeLocker, error) {
+	client := redis.NewClient(opt)
 	_, err := client.Ping(ctx).Result()
 	if err != nil {
 		return nil, err
 	}
-	return &DistributeLocker{client, ttl, retryStrategy}, nil
+	return &DistributeLocker{mutex: sync.RWMutex{}, redisClient: client, defaultTtl: ttl, defaultRetryStrategy: retryStrategy}, nil
 }
 
-func (l *DistributeLocker) Lock(ctx context.Context, resource string, token string) (*DistributeLock, error) {
+func (l *DistributeLocker) Close() {
+	l.mutex.Lock()
+	defer l.mutex.Unlock()
+	if l.redisClient == nil {
+		return
+	}
+	l.redisClient.Close()
+	l.redisClient = nil
+}
+
+func (l *DistributeLocker) Lock(ctx context.Context, resource string, owner string) (*DistributeLock, error) {
 	return l.LockWithOptions(ctx, &DistributeLockOptions{
 		Resource:      resource,
-		Token:         token,
+		Owner:         owner,
 		Ttl:           l.defaultTtl,
 		RetryStrategy: l.defaultRetryStrategy,
 	})
@@ -76,11 +82,11 @@ func (l *DistributeLocker) LockWithOptions(ctx context.Context, opt *DistributeL
 	}
 
 	for {
-		ok, err := l.redisClient.SetNX(ctx, opt.Resource, opt.Token, ttl).Result()
+		ok, err := l.redisClient.SetNX(ctx, opt.Resource, opt.Owner, ttl).Result()
 		if err != nil {
 			return nil, err
 		} else if ok {
-			return &DistributeLock{l.redisClient, opt.Resource, opt.Token}, nil
+			return &DistributeLock{l.redisClient, opt.Resource, opt.Owner}, nil
 		}
 		// time.Sleep(1 * time.Second) // mock lock process
 
@@ -102,7 +108,7 @@ func (l *DistributeLocker) LockWithOptions(ctx context.Context, opt *DistributeL
 type DistributeLock struct {
 	client   *redis.Client
 	resource string
-	token    string
+	owner    string
 }
 
 func (i *DistributeLock) Refresh(ctx context.Context, ttl time.Duration) error {
@@ -110,7 +116,7 @@ func (i *DistributeLock) Refresh(ctx context.Context, ttl time.Duration) error {
 		return nil
 	}
 	ttlVal := strconv.FormatInt(int64(ttl/time.Millisecond), 10)
-	status, err := luaRefresh.Run(ctx, i.client, []string{i.resource}, i.token, ttlVal).Result()
+	status, err := luaRefresh.Run(ctx, i.client, []string{i.resource}, i.owner, ttlVal).Result()
 	if err != nil {
 		return err
 	} else if status == int64(1) {
@@ -124,7 +130,7 @@ func (i *DistributeLock) Release(ctx context.Context) error {
 	if i == nil {
 		return nil
 	}
-	res, err := luaRelease.Run(ctx, i.client, []string{i.resource}, i.token).Result()
+	res, err := luaRelease.Run(ctx, i.client, []string{i.resource}, i.owner).Result()
 	if err == redis.Nil {
 		return ErrLockNotHeld
 	} else if err != nil {

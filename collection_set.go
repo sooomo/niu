@@ -2,18 +2,14 @@ package niu
 
 import "sync"
 
-type empty struct{}
-
-var voidPlaceholder empty
-
 type Set[T comparable] struct {
-	underlying map[T]empty
+	underlying map[T]Empty
 	lock       sync.RWMutex
 }
 
 func (s *Set[T]) ensureInit() {
 	if s.underlying == nil {
-		s.underlying = map[T]empty{}
+		s.underlying = map[T]Empty{}
 	}
 }
 
@@ -23,7 +19,7 @@ func (s *Set[T]) Add(item T) {
 	defer s.lock.Unlock()
 
 	s.ensureInit()
-	s.underlying[item] = voidPlaceholder
+	s.underlying[item] = Empty{}
 }
 
 // O(n)
@@ -33,7 +29,7 @@ func (s *Set[T]) AddRange(items ...T) {
 
 	s.ensureInit()
 	for _, v := range items {
-		s.underlying[v] = voidPlaceholder
+		s.underlying[v] = Empty{}
 	}
 }
 

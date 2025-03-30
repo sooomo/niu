@@ -135,7 +135,7 @@ type Hub struct {
 
 	subprotocols []string
 	connCount    atomic.Int32 // 所有仍在连接状态的数量
-	pool         RoutinePool
+	pool         CoroutinePool
 
 	liveCheckDuration  time.Duration
 	liveTicker         *time.Ticker
@@ -156,7 +156,7 @@ func NewHub(
 	subprotocols []string,
 	liveCheckDuration, connMaxIdleTime,
 	readTimeout, writeTimeout time.Duration,
-	pool RoutinePool,
+	pool CoroutinePool,
 	handshakeTimeout time.Duration,
 	enableCompression bool,
 	checkOriginFn func(r *http.Request) bool,

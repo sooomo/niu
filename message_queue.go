@@ -3,6 +3,7 @@ package niu
 import (
 	"context"
 	"strings"
+	"sync"
 
 	"github.com/redis/go-redis/v9"
 )
@@ -16,25 +17,32 @@ type MessageQueue interface {
 }
 
 type RedisMessageQueue struct {
+	mutex      sync.RWMutex
 	client     *redis.Client // Redis连接
-	pool       RoutinePool   // 协程池
+	pool       CoroutinePool // 协程池
 	xaddMaxLen int           // 发布消息时XAddArgs中MaxLen的值
 	batchSize  int           // 消费消息时每次批量获取一批的大小
+	closeChan  chan Empty
 }
 
-func NewRedisMessageQueue(c *redis.Client, pool RoutinePool, xaddMaxLen, batchSize int) *RedisMessageQueue {
-	return &RedisMessageQueue{c, pool, xaddMaxLen, batchSize}
-}
-
-func NewRedisMessageQueueWithAddr(ctx context.Context, addr string, pool RoutinePool, xaddMaxLen, batchSize int) (*RedisMessageQueue, error) {
-	client := redis.NewClient(&redis.Options{
-		Addr: addr,
-	})
+func NewRedisMessageQueue(ctx context.Context, opt *redis.Options, pool CoroutinePool, xaddMaxLen, batchSize int) (*RedisMessageQueue, error) {
+	client := redis.NewClient(opt)
 	_, err := client.Ping(ctx).Result()
 	if err != nil {
 		return nil, err
 	}
-	return &RedisMessageQueue{client, pool, xaddMaxLen, batchSize}, nil
+	return &RedisMessageQueue{sync.RWMutex{}, client, pool, xaddMaxLen, batchSize, make(chan Empty)}, nil
+}
+
+func (m *RedisMessageQueue) Close() {
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+	if m.client == nil {
+		return
+	}
+	m.closeChan <- Empty{}
+	m.client.Close()
+	m.client = nil
 }
 
 // 发布消息
@@ -62,6 +70,8 @@ func (m *RedisMessageQueue) Subscribe(ctx context.Context, topic, group, consume
 	return m.pool.Submit(func() {
 		for {
 			select {
+			case <-m.closeChan:
+				return
 			case <-ctx.Done():
 				return
 			default:
@@ -93,6 +103,8 @@ func (m *RedisMessageQueue) consume(ctx context.Context, topic, group, consumer,
 	// 处理消息
 	for _, msg := range result[0].Messages {
 		select {
+		case <-m.closeChan:
+			return nil
 		case <-ctx.Done():
 			return nil
 		default:

@@ -5,8 +5,9 @@ import (
 	"sync"
 )
 
-type RoutinePool interface {
+type CoroutinePool interface {
 	Submit(task func()) error
+	Release()
 }
 
 type BytePool struct{ p sync.Pool }
