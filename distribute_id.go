@@ -19,7 +19,7 @@ type DistributeId struct {
 	idGenerators map[string]*IdGenerator
 }
 
-func NewDistributeId(ctx context.Context, opt *redis.Options, key string, start int) (*DistributeId, error) {
+func NewDistributeId(ctx context.Context, opt *redis.Options) (*DistributeId, error) {
 	client := redis.NewClient(opt)
 	_, err := client.Ping(ctx).Result()
 	if err != nil {
