@@ -91,7 +91,7 @@ func (c *Line) start() error {
 		for {
 			select {
 			case msg := <-c.writeChan:
-				err := c.conn.SetWriteDeadline(time.Now().Add(c.hub.writeTimeout))
+				err = c.conn.SetWriteDeadline(time.Now().Add(c.hub.writeTimeout))
 				if err != nil {
 					c.close(false, err)
 				}

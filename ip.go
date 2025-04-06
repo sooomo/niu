@@ -18,7 +18,7 @@ func GetClientIp(ctx *gin.Context) string {
 	ips := ctx.Request.Header.Get("X-Forwarded-For")
 	splitIps := strings.SplitSeq(ips, ",")
 	for ip := range splitIps {
-		netIp := net.ParseIP(ip)
+		netIp = net.ParseIP(ip)
 		if netIp != nil {
 			return ip
 		}
